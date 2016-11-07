@@ -71,6 +71,7 @@ union subdata_u {
 
 typedef struct {
   ngx_str_t                   *shm_chid;
+  ngx_str_t                   *shm_chid_dup;
   store_channel_head_shm_t    *shared_channel_data;
   nchan_loc_conf_t            *cf;
   union subdata_u              d;
@@ -87,6 +88,10 @@ ngx_int_t memstore_ipc_send_subscribe(ngx_int_t dst, ngx_str_t *chid, memstore_c
     ERR("Out of shared memory, can't send IPC subscrive alert");
     return NGX_DECLINED;
   }
+  
+  data.shm_chid_dup = data.shm_chid;
+  
+  DBG("shm_chid when sending subscribe is %p %V", data.shm_chid, data.shm_chid);
   data.shared_channel_data = NULL;
   data.d.origin_chanhead = origin_chanhead;
   data.cf = cf;
@@ -97,7 +102,7 @@ static void receive_subscribe(ngx_int_t sender, subscribe_data_t *d) {
   memstore_channel_head_t    *head;
   subscriber_t               *ipc_sub = NULL;
   
-  DBG("received subscribe request for channel %V", d->shm_chid);
+  DBG("received subscribe request for channel %V (shm_chid %p, dup %p)", d->shm_chid, d->shm_chid, d->shm_chid_dup);
   head = nchan_memstore_get_chanhead(d->shm_chid, d->cf);
   
   if(head == NULL) {

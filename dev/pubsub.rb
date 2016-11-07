@@ -12,7 +12,7 @@ require "http/parser"
 
 begin
   require "http/2"
-rescue
+rescue Exception => e
   HTTP2_MISSING=true
 end
   
@@ -1215,7 +1215,7 @@ class Subscriber
     end
     
     def new_bundle(uri, user_agent)
-      super uri, user_agent, "*/*", {"TE": "Chunked"}
+      super uri, user_agent, "*/*", {"TE" => "Chunked"}
     end
     
     def setup_bundle(b)

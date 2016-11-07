@@ -20,11 +20,48 @@ static void receive_alert_delay_log_timer_handler(ngx_event_t *ev);
 static void send_alert_delay_log_timer_handler(ngx_event_t *ev);
 
 
+#if IPC_ALERT_DEBUG
+
+
+static alert_checksum_t ipc_alert_checksum(ipc_alert_t *alert) {
+  alert_checksum_t chk;
+  chk.meta = alert->time_sent + alert->num + alert->dst_slot + alert->src_slot + alert->worker_generation + alert->code;
+  chk.data = ngx_crc32_short((u_char *)alert->data, IPC_DATA_SIZE);
+  return chk;
+}
+
+static int verify_ipc_alert(ipc_alert_t *alert) {
+  alert_checksum_t chk = ipc_alert_checksum(alert);
+  int              valid = 1;
+  if(chk.data != alert->checksum.data) {
+    ERR("Bad data checksum for alert #%i", alert->num);
+    valid = 0;
+  }
+  if(chk.meta != alert->checksum.meta) {
+    ERR("Bad meta checksum for alert #%i", alert->num);
+    valid = 0;
+  }
+  if(ngx_process_slot != alert->dst_slot) {
+    ERR("Received alert for wrong process slot %i (my slot: %i)", alert->dst_slot, ngx_process_slot);
+    valid = 0;
+  }
+  if(valid) {
+    DBG("Valid checksum for alert #%i (m:%i,d:%i)", alert->num, (ngx_int_t )alert->checksum.meta, (ngx_int_t )alert->checksum.data);
+  }
+  return valid;
+}
+
+#endif
+
 static void ipc_read_handler(ngx_event_t *ev);
 
 ngx_int_t ipc_init(ipc_t *ipc) {
   int                             i = 0;
   ipc_process_t                  *proc;
+  
+#if IPC_ALERT_DEBUG
+  nchan_stub_status_enabled = 1;
+#endif
   
   nchan_init_timer(&receive_alert_delay_log_timer, receive_alert_delay_log_timer_handler, NULL);
   nchan_init_timer(&send_alert_delay_log_timer, send_alert_delay_log_timer_handler, NULL);
@@ -429,6 +466,10 @@ static void ipc_read_handler(ngx_event_t *ev) {
       ERR("Got IPC alert for previous generation's worker. discarding.");
     }
     else {
+#if IPC_ALERT_DEBUG      
+      DBG("Got IPC alert #%i", alert.num);
+      assert(verify_ipc_alert(&alert));
+#endif
 #if DEBUG_DELAY_IPC_RECEIVE_ALERT_MSEC
       delayed_alert_glob_t   *glob = ngx_alloc(sizeof(*glob), ngx_cycle->log);
       if (NULL == glob) {
@@ -454,13 +495,21 @@ static void ipc_read_handler(ngx_event_t *ev) {
 
 
 ngx_int_t ipc_alert(ipc_t *ipc, ngx_int_t slot, ngx_uint_t code, void *data, size_t data_size) {
-  DBG("IPC send alert code %i to slot %i", code, slot);
   
   if(data_size > IPC_DATA_SIZE) {
     ERR("IPC_DATA_SIZE too small. wanted %i, have %i", data_size, IPC_DATA_SIZE);
     assert(0);
   }
+  
+#if IPC_ALERT_DEBUG
+  ngx_uint_t num = nchan_update_stub_status(ipc_total_alerts_sent, 1);
+#else
   nchan_update_stub_status(ipc_total_alerts_sent, 1);
+  DBG("IPC send alert code %i to slot %i", code, slot);
+#endif
+  
+  
+
 #if (FAKESHARD)
   
   ipc_alert_t         alert = {0};
@@ -470,6 +519,13 @@ ngx_int_t ipc_alert(ipc_t *ipc, ngx_int_t slot, ngx_uint_t code, void *data, siz
   alert.worker_generation = memstore_worker_generation;
   alert.code = code;
   ngx_memcpy(alert.data, data, data_size);
+  
+#if IPC_ALERT_DEBUG
+  alert.num = num;
+  alert.dst_slot = slot;
+  alert.checksum = ipc_alert_checksum(&alert);
+  DBG("IPC send alert #%i code %i (checksum m:%i,d:%i) to slot %i", num, code, (ngx_int_t )alert.checksum.meta, (ngx_int_t )alert.checksum.data, slot);
+#endif
   
   //switch to destination
   memstore_fakeprocess_push(slot);
@@ -516,6 +572,13 @@ ngx_int_t ipc_alert(ipc_t *ipc, ngx_int_t slot, ngx_uint_t code, void *data, siz
   alert->code = code;
   alert->worker_generation = memstore_worker_generation;
   ngx_memcpy(&alert->data, data, data_size);
+  
+#if IPC_ALERT_DEBUG
+  alert->num = num;
+  alert->dst_slot = slot;
+  alert->checksum = ipc_alert_checksum(alert);
+  DBG("IPC send alert #%i code %i (checksum m:%i,d:%i) to slot %i", num, code, (ngx_int_t )alert->checksum.meta, (ngx_int_t )alert->checksum.data, slot);
+#endif
   
   ipc_write_handler(proc->c->write);
   

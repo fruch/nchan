@@ -4,11 +4,10 @@ require_relative 'pubsub.rb'
 require 'json'
 require 'celluloid/current'
 
-seed = 10
-MAX_CHANS= 5
+seed = 101
+MAX_CHANS= 100
 
-SUB_URL="http://127.0.0.1:8082/sub/broadcast/"
-PUB_URL="http://127.0.0.1:8082/pub/"
+SERVER="http://127.0.0.1:8082"
 
 class Chans
   
@@ -26,12 +25,31 @@ class Chans
       end
     end
     
+    def chid
+      id=""
+      num=@rng.rand(35)
+      num.times do
+        id << (65 + @rng.rand(26)).chr
+      end
+      id
+    end
+    
+    private :chid
+    
+    def pubsub_url
+      n=@rng.rand(@urls.length)
+      sprintf "#{SERVER}#{@urls[n]}", chid
+    end
+    
     attr_accessor :id, :sub, :pub
-    def initialize(id, chan, subscriber_opt={})
-      @id=id
-      @sub=Subscriber.new("#{SUB_URL}#{id}", 1, subscriber_opt.merge(client: :websocket, quit_message: 'FIN'))
+    def initialize(rng, chan, subscriber_opt={})
+      @rng=rng
+      @urls = ["/bandwagon/sse/", "/pricemaker/sse/", "/primary/sse/",
+               "/bandwagon/sse/%s", "/pricemaker/sse/%s", "/primary/sse/%s"]
+      url = pubsub_url
+      @sub=Subscriber.new(url, 1, subscriber_opt.merge(client: :websocket, quit_message: 'FIN'))
       @sub.run
-      @pub=Publisher.new("#{PUB_URL}#{id}")
+      @pub=Publisher.new(url)
       @chan = chan
     end
         
@@ -58,22 +76,11 @@ class Chans
     @published = 0
   end
   
-  def chid
-    id=""
-    num=rand(2..45)
-    num.times do
-      id << (65 + rand(26)).chr
-    end
-    id
-  end
-  
-  private :chid
-  
   def chan
     rn = @rng.rand(MAX_CHANS)
     chan = @chans[rn]
     unless chan
-      chan = Chan.new(chid, self)
+      chan = Chan.new(@rng, self)
       @chans << chan
     end
     chan

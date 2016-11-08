@@ -180,7 +180,8 @@ build() {
     --http-uwsgi-temp-path=${_tmp_path}/uwsgi_temp
     --http-log-path=${_access_log}
     --error-log-path=${_error_log}
-    --with-http_ssl_module
+    --with-http_gunzip_module
+    --with-ipv6
   )
 
   if [[ $DYNAMIC == 1 ]]; then

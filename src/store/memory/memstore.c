@@ -173,33 +173,33 @@ static ngx_int_t nchan_memstore_chanhead_ready_to_reap(memstore_channel_head_t *
         default:
           sts = "????";
       }
-      DBG("not ready to reap %V : status %s", &ch->id, sts);
+      DBG("not ready to reap %V (len %i): status %s", &ch->id, ch->id.len, sts);
       return NGX_DECLINED;
     }
     
     if(ch->gc_start_time + NCHAN_CHANHEAD_EXPIRE_SEC - ngx_time() > 0) {
-      DBG("not ready to reap %V, %i sec left", &ch->id, ch->gc_start_time  + NCHAN_CHANHEAD_EXPIRE_SEC - ngx_time());
+      DBG("not ready to reap %V (len %i), %i sec left", &ch->id, ch->id.len, ch->gc_start_time  + NCHAN_CHANHEAD_EXPIRE_SEC - ngx_time());
       return NGX_DECLINED;
     }
     
     if (ch->total_sub_count > 0) { //there are subscribers
-      DBG("not ready to reap %V, %i subs left", &ch->id, ch->total_sub_count);
+      DBG("not ready to reap %V (len %i), %i subs left", &ch->id, ch->id.len, ch->total_sub_count);
       return NGX_DECLINED;
     }
     
     if(memstore_chanhead_reservations(ch) > 0) {
-      DBG("not ready to reap %V, still reserved:", &ch->id);
+      DBG("not ready to reap %V (len %i), still reserved:", &ch->id, ch->id.len);
       //log_memstore_chanhead_reservations(ch);
       return NGX_DECLINED;
     }
     
     if(ch->cf && ch->cf->redis.enabled && ch->churn_start_time + ch->redis_idle_cache_ttl < ngx_time()) {
-      DBG("get rid of idle redis cache channel %p %V (msgs: %i)", ch, &ch->id, ch->channel.messages);
+      DBG("get rid of idle redis cache channel %p %V (len %i) (msgs: %i)", ch, &ch->id, ch->id.len, ch->channel.messages);
       return NGX_OK;
     }
     else if(ch->channel.messages > 0) {
       assert(ch->msg_first != NULL);
-      DBG("not ready to reap %V, %i messages left", &ch->id, ch->channel.messages);
+      DBG("not ready to reap %V (len %i), %i messages left", &ch->id, ch->id.len, ch->channel.messages);
       return NGX_DECLINED;
     }
     //DBG("ok to delete channel %V", &ch->id);
@@ -493,7 +493,7 @@ void msg_debug_assert_isempty(void) {
 
 
 static ngx_int_t chanhead_churner_add(memstore_channel_head_t *ch) {
-  DBG("Chanhead churn add %p %V", ch, &ch->id);
+  DBG("Chanhead churn add %p %V (len %i)", ch, &ch->id, ch->id.len);
   
   //the churner is only allowed to churn self-owned channels
   assert(ch->owner == ch->slot);
@@ -515,7 +515,7 @@ static ngx_int_t chanhead_churner_add(memstore_channel_head_t *ch) {
 
 static ngx_int_t chanhead_churner_withdraw(memstore_channel_head_t *ch) {
   //remove from gc list if we're there
-  DBG("Chanhead churn withdraw %p %V", ch, &ch->id);
+  DBG("Chanhead churn withdraw %p %V (len %i)", ch, &ch->id, ch->id.len);
   
   if(ch->in_churn_queue) {
     ch->in_churn_queue = 0;
@@ -633,7 +633,7 @@ static void memstore_reap_chanhead(memstore_channel_head_t *ch) {
     if(ch->shared)
       shm_free(shm, ch->shared);
   }
-  DBG("chanhead %p (%V) is empty and expired. DELETE.", ch, &ch->id);
+  DBG("chanhead %p (%V (len %i)) is empty and expired. DELETE.", ch, &ch->id, ch->id.len);
   CHANNEL_HASH_DEL(ch);
   if(ch->redis_sub) {
     if(ch->redis_sub->enqueued) {
@@ -876,7 +876,7 @@ ngx_int_t memstore_ensure_chanhead_is_ready(memstore_channel_head_t *head, uint8
   }
   
   if(!head->spooler.running) {
-    DBG("ensure chanhead ready: Spooler for channel %p %V wasn't running. start it.", head, &head->id);
+    DBG("ensure chanhead ready: Spooler for channel %p %V (len %i) wasn't running. start it.", head, &head->id, head->id.len);
     start_chanhead_spooler(head);
   }
   
@@ -895,14 +895,14 @@ ngx_int_t memstore_ensure_chanhead_is_ready(memstore_channel_head_t *head, uint8
       if(ipc_subscribe_if_needed) {
         ngx_int_t       rc;
         assert(head->cf);
-        DBG("ensure chanhead ready: request for %V from %i to %i", &head->id, memstore_slot(), owner);
+        DBG("ensure chanhead ready: request for %V (len %i) from %i to %i", &head->id, head->id.len, memstore_slot(), owner);
         if((rc = memstore_ipc_send_subscribe(owner, &head->id, head, head->cf)) != NGX_OK) {
           return rc;
         }
       }
     }
     else if(head->foreign_owner_ipc_sub != NULL && head->status == WAITING) {
-      DBG("ensure chanhead ready: subscribe request for %V from %i to %i", &head->id, memstore_slot(), owner);
+      DBG("ensure chanhead ready: subscribe request for %V (len %i) from %i to %i", &head->id, head->id.len, memstore_slot(), owner);
       memstore_ready_chanhead_unless_stub(head);
     }
   }
@@ -1124,6 +1124,9 @@ static memstore_channel_head_t *chanhead_memstore_create(ngx_str_t *channel_id, 
 
 static ngx_inline memstore_channel_head_t *ensure_chanhead_ready_or_trash_chanhead(memstore_channel_head_t *head, int8_t ipc_sub_if_needed) {
   if(head != NULL) {
+    if(head->id.len >= 15 && ngx_memcmp("/pricemaker_all", head->id.data, 15) == 0) {
+      assert(head->id.len == 15);
+    }
     if(memstore_ensure_chanhead_is_ready(head, ipc_sub_if_needed) != NGX_OK) {
       head->status = INACTIVE;
       chanhead_gc_add(head, "bad chanhead, couldn't ensure readiness");
@@ -1169,7 +1172,7 @@ memstore_channel_head_t *nchan_memstore_get_chanhead_no_ipc_sub(ngx_str_t *chann
 
 ngx_int_t chanhead_gc_add(memstore_channel_head_t *ch, const char *reason) {
   ngx_int_t                   slot = memstore_slot();
-  DBG("Chanhead gc add %p %V: %s", ch, &ch->id, reason);
+  DBG("Chanhead gc add %p %V (len %i): %s", ch, &ch->id, ch->id.len, reason);
   
   if(!ch->shutting_down) {
     assert(ch->foreign_owner_ipc_sub == NULL); //we don't accept still-subscribed chanheads
@@ -1179,7 +1182,7 @@ ngx_int_t chanhead_gc_add(memstore_channel_head_t *ch, const char *reason) {
     ch->shared = NULL;
   }
   if(ch->status == WAITING && !(ch->cf && ch->cf->redis.enabled) && !(ngx_exiting || ngx_quit)) {
-    ERR("tried adding WAITING chanhead %p %V to chanhead_gc. why?", ch, &ch->id);
+    ERR("tried adding WAITING chanhead %p %V (len %i) to chanhead_gc. why?", ch, &ch->id, ch->id.len);
     //don't gc it just yet.
     return NGX_OK;
   }
@@ -1194,7 +1197,7 @@ ngx_int_t chanhead_gc_add(memstore_channel_head_t *ch, const char *reason) {
     nchan_reaper_add(&mpt->chanhead_reaper, ch);
   }
   else {
-    DBG("gc_add chanhead %V: already added", &ch->id);
+    DBG("gc_add chanhead %V (len %i): already added", &ch->id, ch->id.len);
   }
 
   return NGX_OK;
@@ -1202,7 +1205,7 @@ ngx_int_t chanhead_gc_add(memstore_channel_head_t *ch, const char *reason) {
 
 ngx_int_t chanhead_gc_withdraw(memstore_channel_head_t *ch, const char *reason) {
   //remove from gc list if we're there
-  DBG("Chanhead gc withdraw %p %V: %s", ch, &ch->id, reason);
+  DBG("Chanhead gc withdraw %p %V (len %i): %s", ch, &ch->id, ch->id.len, reason);
   
   if(ch->in_gc_queue) {
     nchan_reaper_withdraw(&mpt->chanhead_reaper, ch);
@@ -2722,7 +2725,7 @@ ngx_int_t nchan_store_publish_message_generic(ngx_str_t *channel_id, nchan_msg_t
     
     for(i=0; i<n; i++) {
       if((chead = nchan_memstore_get_chanhead(&ids[i], cf)) == NULL) {
-        ERR("can't get chanhead for id %V", ids[i]);
+        ERR("can't get chanhead for id %V (len %i)", ids[i], ids[i].len);
         //we probably just ran out of shared memory
         callback(NGX_HTTP_INSUFFICIENT_STORAGE, NULL, privdata);
         return NGX_ERROR;
@@ -2743,7 +2746,7 @@ ngx_int_t nchan_store_publish_message_generic(ngx_str_t *channel_id, nchan_msg_t
     }
     
     if((chead = nchan_memstore_get_chanhead(channel_id, cf)) == NULL) {
-      ERR("can't get chanhead for id %V", channel_id);
+      ERR("can't get chanhead for id %V (len %i)", channel_id, channel_id->len);
       callback(NGX_HTTP_INTERNAL_SERVER_ERROR, NULL, privdata);
       return NGX_ERROR;
     }
@@ -2804,7 +2807,7 @@ ngx_int_t nchan_store_chanhead_publish_message_generic(memstore_channel_head_t *
     
     if((shmsg_link = create_shared_message(msg, msg_in_shm)) == NULL) {
       callback(NGX_HTTP_INTERNAL_SERVER_ERROR, NULL, privdata);
-      ERR("can't create unbuffered message for channel %V", &chead->id);
+      ERR("can't create unbuffered message for channel %V (len %i)", &chead->id, chead->id.len);
       return NGX_ERROR;
     }
     publish_msg= shmsg_link->msg;
@@ -2824,13 +2827,13 @@ ngx_int_t nchan_store_chanhead_publish_message_generic(memstore_channel_head_t *
     
     if((shmsg_link = create_shared_message(msg, msg_in_shm)) == NULL) {
       callback(NGX_HTTP_INTERNAL_SERVER_ERROR, NULL, privdata);
-      ERR("can't create shared message for channel %V", &chead->id);
+      ERR("can't create shared message for channel %V (len %i)", &chead->id, chead->id.len);
       return NGX_ERROR;
     }
     
     if(chanhead_push_message(chead, shmsg_link) != NGX_OK) {
       callback(NGX_HTTP_INTERNAL_SERVER_ERROR, NULL, privdata);
-      ERR("can't enqueue shared message for channel %V", &chead->id);
+      ERR("can't enqueue shared message for channel %V (len %i)", &chead->id, chead->id.len);
       return NGX_ERROR;
     }
     

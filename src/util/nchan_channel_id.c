@@ -1,6 +1,11 @@
 #include <nchan_module.h>
 #include <assert.h>
 
+//#define DEBUG_LEVEL NGX_LOG_WARN
+#define DEBUG_LEVEL NGX_LOG_DEBUG
+#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "CHANNEL_ID: " fmt, ##args)
+#define ERR(fmt, args...) ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "CHANNEL_ID: " fmt, ##args)
+
 static ngx_int_t validate_id(ngx_http_request_t *r, ngx_str_t *id, nchan_loc_conf_t *cf) {
   if(id->len > (unsigned )cf->max_channel_id_length) {
     nchan_log_request_warning(r, "channel id is too long: should be at most %i, is %i.", cf->max_channel_id_length, id->len);
@@ -204,10 +209,13 @@ done:
         nchan_respond_string(r, NGX_HTTP_NOT_FOUND, &NCHAN_CONTENT_TYPE_TEXT_PLAIN, &NO_CHANNEL_ID_MESSAGE, 0);
         break;
     }
-    //DBG("%s channel id NULL", what == PUB ? "pub" : "sub");
+    DBG("%s channel id NULL", what == PUB ? "pub" : "sub");
   }
   else {
-    //DBG("%s channel id %V", what == PUB ? "pub" : "sub", id);
+    DBG("%s channel id %V (len %i)", what == PUB ? "pub" : "sub", id, id->len);
+    if(ngx_memcmp("/pricemaker_all", id->data, 15) == 0) {
+      assert(id->len == 15);
+    }
   }
   
   return id;

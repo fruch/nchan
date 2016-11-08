@@ -38,8 +38,8 @@
 #define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "IPC-HANDLERS(%i):" fmt, memstore_slot(), ##args)
 #define ERR(fmt, args...) ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "IPC-HANDLERS(%i):" fmt, memstore_slot(), ##args)
 
-//#define DEBUG_MEMZERO(var) ngx_memzero(var, sizeof(*(var)))
-#define DEBUG_MEMZERO(var) /*nothing*/
+#define DEBUG_MEMZERO(var) ngx_memzero(var, sizeof(*(var)))
+//#define DEBUG_MEMZERO(var) /*nothing*/
 
 //lots of copypasta here, but it's the fastest way for me to write these IPC handlers
 //maybe TODO: simplify this stuff, but probably not as it's not a performance penalty and the code is simple
@@ -53,8 +53,12 @@ static nchan_msg_id_t zero_msgid = NCHAN_ZERO_MSGID;
 
 static ngx_str_t *str_shm_copy(ngx_str_t *str){
   ngx_str_t *out;
+  if(str->len >= 15 && ngx_memcmp("/pricemaker_all", str->data, 15) == 0) {
+    assert(str->len == 15);
+  }
   out = shm_copy_immutable_string(nchan_memstore_get_shm(), str);
-  DBG("create shm_str %p (data@ %p) %V", out, out->data, out);
+  DBG("create shm_str %p (data@ %p len %i (src len %i)) %V", out, out->data, out->len, str->len, out);
+  assert(out->len == str->len);
   return out;
 }
 

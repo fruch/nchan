@@ -5,15 +5,26 @@
 
 #define DEBUG_SHM_ALLOC 1
 
+#define DEBUG_SHM_STRINGS 1
+#define DEBUG_SHM_STRINGS_PADDING 0000
+
 #define SHPOOL(shmem) ((ngx_slab_pool_t *)(shmem)->zone->shm.addr)
 
 //#define DEBUG_LEVEL NGX_LOG_WARN
 #define DEBUG_LEVEL NGX_LOG_DEBUG
 
-#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "SHMEM(%i):" fmt, memstore_slot(), ##args)
-#define ERR(fmt, args...) ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "SHMEM(%i):" fmt, memstore_slot(), ##args)
+#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "SHMEM:" fmt, ##args)
+#define ERR(fmt, args...) ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "SHMEM:" fmt,  ##args)
 
 //#include <valgrind/memcheck.h>
+
+#if DEBUG_SHM_STRINGS
+typedef struct {
+  size_t       pad;
+  size_t       backup_len;
+  ngx_str_t    str;
+} shm_padded_str_t;
+#endif
 
 //shared memory
 shmem_t *shm_create(ngx_str_t *name, ngx_conf_t *cf, size_t shm_size, ngx_int_t (*init)(ngx_shm_zone_t *, void *), void *privdata) {
@@ -159,26 +170,58 @@ void shm_locked_free(shmem_t *shm, void *p) {
 #endif
 }
 
+#if DEBUG_SHM_STRINGS
+static void verify_shm_string(shm_padded_str_t *padded) {
+  if(padded->pad != DEBUG_SHM_STRINGS_PADDING) {
+    ERR("wrong starting padding for string %p, was $i", &padded->str, padded->pad);
+    assert(padded->pad == DEBUG_SHM_STRINGS_PADDING);
+  }
+  
+  u_char    *pt = padded->str.data;
+  assert(pt[padded->str.len]=='>');
+  
+  assert(padded->str.len == padded->backup_len);
+}
+#endif
+
 void shm_verify_immutable_string(shmem_t *shm, ngx_str_t *str) {
- /* u_char    *pt=(u_char *)str-1;
-  assert(pt[0]=='<');
-  pt=str->data;
-  assert(pt[str->len]=='>');
-  */
+#if DEBUG_SHM_STRINGS
+  verify_shm_string(container_of(str, shm_padded_str_t, str));
+#endif
 }
 
 void shm_free_immutable_string(shmem_t *shm, ngx_str_t *str) {
+#if DEBUG_SHM_STRINGS
+  shm_padded_str_t *padded = container_of(str, shm_padded_str_t, str);
+  verify_shm_string(padded);
+  shm_free(shm, padded);
+#else
   shm_free(shm, (void *)str);
+#endif
 }
 
 ngx_str_t *shm_copy_immutable_string(shmem_t *shm, ngx_str_t *str_in) {
   ngx_str_t    *str;
-  size_t        sz = sizeof(*str) + str_in->len;
+  size_t        sz;
+#if DEBUG_SHM_STRINGS
+  shm_padded_str_t *padded;
+  sz = sizeof(*padded) + str_in->len + 4;
+  if((padded = shm_alloc(shm, sz, "string")) == NULL) {
+    return NULL;
+  }
+  padded->pad = DEBUG_SHM_STRINGS_PADDING;
+  str = &padded->str;
+  str->data = (u_char *)&padded[1];
+  str->len = padded->backup_len = str_in->len;
+  str->data[str->len] = '>';
+#else
+  sz = sizeof(*str) + str_in->len;
   if((str = shm_alloc(shm, sz, "string")) == NULL) {
     return NULL;
   }
   str->data=(u_char *)&str[1];
   str->len=str_in->len;
+#endif
   ngx_memcpy(str->data, str_in->data, str_in->len);
   return str;
 }

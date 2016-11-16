@@ -230,7 +230,7 @@ static ngx_int_t nchan_memstore_chanhead_ready_to_reap_slowly(memstore_channel_h
       DBG("get rid of idle redis cache channel %p %V (msgs: %i)", ch, &ch->id, ch->channel.messages);
       return NGX_OK;
     }
-    else if(ch->channel.messages > 0 || (ch->churn_start_time )) {
+    else if(ch->channel.messages > 0) {
       assert(ch->msg_first != NULL);
       DBG("not ready to reap %p %V, %i messages left", ch, &ch->id, ch->channel.messages);
       return NGX_DECLINED;
@@ -1970,11 +1970,16 @@ static ngx_int_t redis_subscribe_channel_authcheck_callback(ngx_int_t status, vo
     if(channel == NULL) {
       channel_status = cf->subscribe_only_existing_channel ? SUB_CHANNEL_UNAUTHORIZED : SUB_CHANNEL_AUTHORIZED;
     }
-    else if(cf->max_channel_subscribers == 0) {
-      channel_status = SUB_CHANNEL_AUTHORIZED;
-    }
-    else {
+    /*
+    else if (cf->max_channel_subscribers > 0) {
+      // don't check this anymore -- a total subscribers count check is less
+      // useful as a per-instance check, which is handled in nchan_store_subscribe_continued
+      // shared total subscriber count check can be re-enabled with another config setting
       channel_status = channel->subscribers >= cf->max_channel_subscribers ? SUB_CHANNEL_UNAUTHORIZED : SUB_CHANNEL_AUTHORIZED;
+    }
+    */
+    else {
+      channel_status = SUB_CHANNEL_AUTHORIZED;
     }
     nchan_store_subscribe_continued(channel_status, NULL, data);
   }
@@ -2005,7 +2010,9 @@ static ngx_int_t nchan_store_subscribe_continued(ngx_int_t channel_status, void*
     
     case SUB_CHANNEL_NOTSURE:
       if(use_redis) {
-        if(cf->subscribe_only_existing_channel && cf->max_channel_subscribers == 0) {
+        if(cf->subscribe_only_existing_channel) {
+          //we used to also check if cf->max_channel_subscribers == 0 here, but that's
+          //no longer necessary, as the shared subscriber total check is now disabled
           if((chanhead = nchan_memstore_find_chanhead(d->channel_id)) != NULL) {
             break;
           }
@@ -2535,7 +2542,7 @@ static nchan_msg_t *create_shm_msg(nchan_msg_t *m) {
     
     cur = copy_preallocated_str_to_cur(&buf->file->name, &mbuf->file->name, cur);
     //ensure last char is NUL
-    *(++cur) = '\0';
+    *(cur++) = '\0';
   }
   
   if(buf_body_size > 0) {

@@ -2893,6 +2893,36 @@ static nchan_msg_t *create_shm_msg(nchan_msg_t *m) {
   return msg;
 }
 
+
+#if NCHAN_MSG_RESERVE_DEBUG
+static ngx_int_t msg_reserve_list_locked(nchan_msg_t *msg, ngx_str_t *rstr) {
+  size_t             len;
+  msg_rsv_dbg_t     *cur;
+  rstr->len = 0;
+  rstr->data = NULL;
+  
+  for(cur = msg->rsv; cur != NULL; cur = cur->next) {
+    len = ngx_strlen(cur->lbl);
+    rstr->data = realloc(rstr->data, rstr->len + len + 4);
+    ngx_sprintf(rstr->data + rstr->len, "'%s', ", cur->lbl);
+    rstr->len += len + 4;
+  }
+  if(rstr->len > 2) {
+    rstr->len -= 2;
+  }
+  
+  return NGX_OK;
+}
+
+
+static ngx_int_t msg_reserve_list(nchan_msg_t *msg, ngx_str_t *rstr) {
+  shmtx_lock(shm);
+  ngx_int_t rc = msg_reserve_list_locked(msg, rstr);
+  shmtx_unlock(shm);
+  return rc;
+}
+#endif
+
 ngx_int_t msg_reserve(nchan_msg_t *msg, char *lbl) {
   ngx_atomic_fetch_add((ngx_atomic_uint_t *)&msg->refcount, 1);
   assert(msg->refcount >= 0);
@@ -2928,10 +2958,21 @@ ngx_int_t msg_release(nchan_msg_t *msg, char *lbl) {
   msg_rsv_dbg_t     *cur, *prev, *next;
   size_t             sz = ngx_strlen(lbl);
   ngx_int_t          rsv_found=0;
-  shmtx_lock(shm);
+  ngx_str_t          reserves = {0, NULL};
+  int num_reservations_checked=0;
   assert(msg->refcount > 0);
+  shmtx_lock(shm);
   for(cur = msg->rsv; cur != NULL; cur = cur->next) {
+    num_reservations_checked++;
     if(ngx_memcmp(lbl, cur->lbl, sz) == 0) {
+      rsv_found = 1;
+      #if NCHAN_MSG_RESERVE_ORDERED_DEBUG
+      if(num_reservations_checked > 1) {
+        msg_reserve_list_locked(msg, &reserves);
+        ERR("message %p release weirdness: '%s' released out-of-order from [%V].", msg, lbl, &reserves);
+        free(reserves.data);
+      }
+      #endif
       prev = cur->prev;
       next = cur->next;
       if(prev) {
@@ -2944,12 +2985,16 @@ ngx_int_t msg_release(nchan_msg_t *msg, char *lbl) {
         msg->rsv = next;
       }
       shm_locked_free(shm, cur);
-      rsv_found = 1;
       break;
     }
   }
-  assert(rsv_found);
   shmtx_unlock(shm);
+  if(!rsv_found) {
+    msg_reserve_list(msg, &reserves);
+    ERR("message %p release error: no '%s' found in [%V].", msg, lbl, &reserves);
+    free(reserves.data);
+    raise(SIGABRT);
+  }
 #endif
   assert(msg->refcount > 0);
   ngx_atomic_fetch_add((ngx_atomic_uint_t *)&msg->refcount, -1);

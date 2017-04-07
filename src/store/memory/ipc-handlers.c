@@ -196,6 +196,7 @@ static void receive_subscribe_reply(ngx_int_t sender, subscribe_data_t *d) {
   memstore_ready_chanhead_unless_stub(head);
   
   str_shm_free(d->shm_chid);
+  str_shm_free(d->shm_chid_again);
 }
 
 
